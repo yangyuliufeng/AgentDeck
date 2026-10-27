@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { basename } from "node:path";
+import { homedir } from "node:os";
 import { startServer } from "./server.js";
 import { loadCatalog } from "./catalog.js";
 import { catalogPath, displayPath } from "./paths.js";
@@ -49,13 +52,39 @@ server.on("error", (e: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
+/* 支持以「应用窗口」方式打开的浏览器（macOS），按顺序取第一个已安装的 */
+const APP_WINDOW_BROWSERS = [
+  "/Applications/Google Chrome.app",
+  `${homedir()}/Applications/Google Chrome.app`,
+  "/Applications/Microsoft Edge.app",
+  "/Applications/Brave Browser.app",
+  "/Applications/Chromium.app",
+];
+
+/**
+ * 打开界面窗口。
+ * macOS 上若装有 Chromium 系浏览器，优先用 --app 模式：
+ * 无地址栏、无标签页、独立 Dock 图标，看起来是一个本地 App 窗口而非网页。
+ * 找不到时退回普通方式打开。
+ */
 function openBrowser(u: string): void {
-  const cmd =
-    process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-  const args = process.platform === "win32" ? ["/c", "start", "", u] : [u];
   try {
+    if (process.platform === "darwin") {
+      const app = APP_WINDOW_BROWSERS.find((p) => existsSync(p));
+      if (app) {
+        const appName = basename(app, ".app");
+        spawn("open", ["-n", "-a", appName, "--args", "--app", u], {
+          detached: true,
+          stdio: "ignore",
+        }).unref();
+        return;
+      }
+    }
+    const cmd =
+      process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+    const args = process.platform === "win32" ? ["/c", "start", "", u] : [u];
     spawn(cmd, args, { detached: true, stdio: "ignore" }).unref();
   } catch {
-    // 打不开浏览器不致命，手动访问即可
+    // 打不开窗口不致命，手动访问即可
   }
 }

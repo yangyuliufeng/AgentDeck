@@ -3,7 +3,7 @@
 统一管理 **Cline** / **Claude Code** / **OpenCode** 的 Provider、Base URL、Model 配置。
 
 - 读取 `~/.config/agent-deck.yaml` 作为唯一的 provider/model 台账（API key、多个 baseURL、上下文窗口、价格）
-- 启动后在浏览器里打开一个小界面，为三个程序分别选择 provider / baseURL / model
+- 启动后打开一个**独立桌面窗口**（Chrome 应用模式，无地址栏无标签页，像本地 App），为三个程序分别选择 provider / baseURL / model
 - 点「保存配置」后自动修改各程序的真实配置文件（修改前自动备份）
 
 ## 快速开始
@@ -17,7 +17,7 @@
 
 ```bash
 npm install
-npm start        # 编译并启动，自动打开浏览器 http://127.0.0.1:37890
+npm start        # 编译并启动，自动弹出独立窗口（需装有 Chrome/Edge/Brave，否则退回打开浏览器标签页）
 ```
 
 常用参数：
