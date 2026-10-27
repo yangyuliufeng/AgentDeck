@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>AgentDeck · AI CLI 配置中心</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%234f8cff'/%3E%3Ctext x='50' y='69' font-size='58' text-anchor='middle' fill='white' font-family='sans-serif'%3E%E2%8C%98%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
     --bg: #0f1115;
@@ -128,6 +129,12 @@ function escapeHtml(s) {
 }
 /* claude code 用原始地址；cline / opencode 由后端自动补 /v1，前端无需关心 */
 
+/* 台账里存规范地址（可能不带 /v1），程序配置文件里可能已补 /v1，比较时归一化 */
+function urlSame(a, b) {
+  const norm = (u) => String(u ?? "").replace(/\/+$/, "").replace(/\/v1$/, "");
+  return norm(a) === norm(b);
+}
+
 /* ---------- 数据加载 ---------- */
 
 async function load() {
@@ -225,46 +232,52 @@ function buildCard(app, catalog) {
   for (const pid of providerIds) {
     selProvider.addOption(pid, pid);
   }
-  selProvider.value = matchedPid ?? providerIds[0];
 
-  function refresh() {
-    const pid = selProvider.value;
-    const prov = catalog.providers[pid];
+  /* model 列表与 provider 无关（台账里 models 与 providers 平级），只构建一次 */
+  const modelEntries = Object.entries(catalog.models);
+  selModel.setOptions(
+    modelEntries.map(([mid, m]) => [
+      mid,
+      `${mid} · ctx ${fmtTokens(m.contextWindow)} · ¥${m.price.input}/¥${m.price.output}`,
+    ]),
+  );
 
-    /* baseURL 选项：台账中的规范地址；当前检测值在列表中则优先选中 */
+  /* 重建 Base URL 列表；能对上 preferredUrl（忽略末尾斜杠 / /v1 差异）则选中它 */
+  function fillUrls(preferredUrl) {
+    const prov = catalog.providers[selProvider.value];
     selURL.setOptions(prov.baseUrls.map((u) => [u, u]));
-    let url =
-      matchedPid === pid && app.current?.baseURL && prov.baseUrls.includes(app.current.baseURL)
-        ? app.current.baseURL
-        : prov.baseUrls[0];
-    selURL.value = url;
-
-    /* model 选项：平级列表，与 provider 独立选择 */
-    const modelEntries = Object.entries(catalog.models);
-    selModel.setOptions(
-      modelEntries.map(([mid, m]) => [
-        mid,
-        `${mid} · ctx ${fmtTokens(m.contextWindow)} · ¥${m.price.input}/¥${m.price.output}`,
-      ]),
-    );
-    let model =
-      app.current?.model && catalog.models[app.current.model] ? app.current.model : modelEntries[0][0];
-    selModel.value = model;
-
-    /* 模型信息 */
-    const m = catalog.models[selModel.value];
-    if (m) {
-      info.innerHTML =
-        `<span>上下文 <b>${fmtTokens(m.contextWindow)}</b></span>` +
-        (m.maxOutputTokens != null ? `<span>最大输出 <b>${fmtTokens(m.maxOutputTokens)}</b></span>` : "") +
-        `<span>价格 <b>¥${m.price.input} 输入 / ¥${m.price.output} 输出</b> /百万 tokens</span>` +
-        (m.price.cacheRead != null ? `<span>缓存读 <b>¥${m.price.cacheRead}</b></span>` : "");
-    }
+    const idx = preferredUrl ? prov.baseUrls.findIndex((u) => urlSame(u, preferredUrl)) : -1;
+    selURL.value = idx >= 0 ? prov.baseUrls[idx] : prov.baseUrls[0];
   }
 
-  selProvider.el.addEventListener("change", refresh);
-  selModel.el.addEventListener("change", refresh);
-  refresh();
+  function updateInfo() {
+    const m = catalog.models[selModel.value];
+    if (!m) {
+      info.innerHTML = "";
+      return;
+    }
+    info.innerHTML =
+      `<span>上下文 <b>${fmtTokens(m.contextWindow)}</b></span>` +
+      (m.maxOutputTokens != null ? `<span>最大输出 <b>${fmtTokens(m.maxOutputTokens)}</b></span>` : "") +
+      `<span>价格 <b>¥${m.price.input} 输入 / ¥${m.price.output} 输出</b> /百万 tokens</span>` +
+      (m.price.cacheRead != null ? `<span>缓存读 <b>¥${m.price.cacheRead}</b></span>` : "");
+  }
+
+  /* 切 provider：只重建地址列表（沿用当前配置里属于该 provider 的地址），model 选择保持不变 */
+  selProvider.el.addEventListener("change", () => {
+    fillUrls(matchedPid === selProvider.value ? app.current?.baseURL : null);
+    updateInfo();
+  });
+  /* 改 model / 地址：只刷新信息面板，不得重置其他下拉框 */
+  selModel.el.addEventListener("change", updateInfo);
+  selURL.el.addEventListener("change", updateInfo);
+
+  /* 初始值：当前配置对得上台账就回显当前值，否则用第一个 */
+  selProvider.value = matchedPid ?? providerIds[0];
+  fillUrls(matchedPid === selProvider.value ? app.current?.baseURL : null);
+  selModel.value =
+    app.current?.model && catalog.models[app.current.model] ? app.current.model : modelEntries[0][0];
+  updateInfo();
 
   card._collect = () => ({
     provider: selProvider.value,
