@@ -1,0 +1,25 @@
+{
+  "name": "agent-deck",
+  "version": "0.1.0",
+  "description": "统一管理 cline / claude code / opencode 的 provider、baseURL、model 配置",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "agent-deck": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "tsc -p tsconfig.json && node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.0"
+  }
+}

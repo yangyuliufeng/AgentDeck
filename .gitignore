@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.agentdeck.bak
+*.agentdeck.tmp
+.DS_Store
