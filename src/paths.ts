@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { homedir } from "node:os";
 
 /** agent-deck 自身的配置目录（provider/model 台账） */
@@ -28,10 +28,11 @@ export function clineSettingsDir(): string {
   return join(homedir(), ".cline", "data", "settings");
 }
 
-/** 展示用路径：家目录前缀替换为 ~ */
+/** 展示用路径：家目录前缀替换为 ~，分隔符统一为 /（macOS 原生如此，Windows 下观感一致） */
 export function displayPath(p: string): string {
   const home = homedir();
-  if (p === home) return "~";
-  if (p.startsWith(home + "/")) return "~" + p.slice(home.length);
-  return p;
+  let out = p;
+  if (p === home) out = "~";
+  else if (p.startsWith(home + sep)) out = "~" + p.slice(home.length);
+  return out.split(sep).join("/");
 }

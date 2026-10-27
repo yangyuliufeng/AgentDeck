@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { createRequire } from "node:module";
 import type { AppSelection, Catalog, TargetApp } from "../types.js";
 import { opencodeConfigPath, opencodeDbPath } from "../paths.js";
 import { readJson, writeJsonAtomic } from "../fsutil.js";
@@ -26,6 +26,37 @@ interface OpenCodeConfig {
   [k: string]: unknown;
 }
 
+/* ---------- node:sqlite 兼容加载 ----------
+ * node:sqlite 自 Node 22.13 起才默认可用（更早版本需 --experimental-sqlite 或根本没有）。
+ * 用 createRequire + try/catch 加载：老版本 Node 上程序仍能启动，
+ * 只是 OpenCode 的 key 会回退写入 opencode.json 的 options.apiKey。
+ */
+interface SqliteStatement {
+  get(...params: unknown[]): unknown;
+  run(...params: unknown[]): unknown;
+}
+
+interface SqliteDatabase {
+  prepare(sql: string): SqliteStatement;
+  exec(sql: string): void;
+  close(): void;
+}
+
+type SqliteCtor = new (path: string, options?: { readOnly?: boolean }) => SqliteDatabase;
+
+let sqliteCtor: SqliteCtor | null | undefined;
+
+function getSqlite(): SqliteCtor | null {
+  if (sqliteCtor !== undefined) return sqliteCtor;
+  try {
+    const mod = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync?: SqliteCtor };
+    sqliteCtor = mod.DatabaseSync ?? null;
+  } catch {
+    sqliteCtor = null;
+  }
+  return sqliteCtor;
+}
+
 /* ---------- credential 表（opencode v2 的 API key 存储于 opencode.db） ---------- */
 
 interface CredentialRow {
@@ -35,6 +66,8 @@ interface CredentialRow {
 
 /** 读取某 provider 在 credential 表中的 key；DB 不存在或无行返回 null */
 function readCredentialKey(dbPath: string, providerId: string): string | null {
+  const DatabaseSync = getSqlite();
+  if (!DatabaseSync) return null;
   try {
     const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
@@ -63,7 +96,9 @@ function newCredentialId(): string {
  */
 function writeCredentialKey(dbPath: string, providerId: string, apiKey: string): boolean {
   if (!existsSync(dbPath)) return false;
-  let db: DatabaseSync;
+  const DatabaseSync = getSqlite();
+  if (!DatabaseSync) return false;
+  let db: SqliteDatabase;
   try {
     db = new DatabaseSync(dbPath);
   } catch {
