@@ -28,6 +28,8 @@ node dist/index.js --no-open      # 不自动打开浏览器
 AGENT_DECK_PORT=48080 npm start   # 用环境变量指定端口
 ```
 
+如果目标端口上已经跑着一个 AgentDeck（启动时用 `GET /api/health` 的 `app: "agent-deck"` 标识来确认），程序不会报错退出，而是**直接打开那个已经在运行的界面窗口然后结束**；只有当端口被别的程序占用时才会提示用 `--port` 换端口。
+
 服务只监听 `127.0.0.1`，不会暴露到局域网。
 
 ## 配置台账 `~/.config/agent-deck.yaml`

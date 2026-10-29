@@ -44,13 +44,41 @@ server.on("listening", () => {
 });
 
 server.on("error", (e: NodeJS.ErrnoException) => {
-  if (e.code === "EADDRINUSE") {
-    console.error(`端口 ${port} 已被占用（是否已有一个 AgentDeck 在运行？可用 --port 换端口）`);
-  } else {
-    console.error(`启动失败: ${e.message}`);
-  }
-  process.exit(1);
+  void (async () => {
+    if (e.code === "EADDRINUSE") {
+      const existing = await probeAgentDeck(port);
+      if (existing) {
+        console.log(`端口 ${port} 上已有一个 AgentDeck 在运行（pid ${existing.pid ?? "?"}），直接打开界面`);
+        console.log(`  界面:      ${url}`);
+        if (!noOpen) openBrowser(url);
+        process.exit(0);
+      }
+      console.error(`端口 ${port} 已被其他程序占用，请用 --port 换一个端口`);
+    } else {
+      console.error(`启动失败: ${e.message}`);
+    }
+    process.exit(1);
+  })();
 });
+
+interface AgentDeckHealth {
+  app?: string;
+  pid?: number;
+}
+
+/** 探测端口上是否已有一个 AgentDeck（通过 /api/health 身份签名判断） */
+async function probeAgentDeck(p: number): Promise<AgentDeckHealth | undefined> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${p}/api/health`, {
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!res.ok) return undefined;
+    const data = (await res.json()) as AgentDeckHealth;
+    return data.app === "agent-deck" ? data : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /* 支持以「应用窗口」方式打开的浏览器（macOS），按顺序取第一个已安装的 */
 const APP_WINDOW_BROWSERS = [

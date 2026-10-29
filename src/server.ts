@@ -77,6 +77,12 @@ export function startServer(port: number): ReturnType<typeof createServer> {
         return;
       }
 
+      // 身份探针：端口被占用时，用于判断占用者是不是另一个 AgentDeck
+      if (req.method === "GET" && url === "/api/health") {
+        sendJson(res, 200, { app: "agent-deck", pid: process.pid });
+        return;
+      }
+
       // 状态：catalog + 三个程序的当前配置（路径以 ~ 形式展示）
       if (req.method === "GET" && url === "/api/state") {
         const { catalog, error } = loadCatalog(catalogPath());
