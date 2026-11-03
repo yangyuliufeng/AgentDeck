@@ -143,7 +143,7 @@ async function load() {
     const res = await fetch("/api/state");
     state.data = await res.json();
   } catch (e) {
-    showBanner("无法连接本地服务：" + e.message);
+    showBanner("无法连接 AgentDeck 服务：服务进程未在运行（可能已保存退出或窗口被关闭）。请重新运行 run.ps1 后刷新页面。（" + e.message + "）");
     return;
   }
   render();
@@ -369,7 +369,7 @@ $("save").addEventListener("click", async () => {
       farewell();
     }
   } catch (e) {
-    showBanner("保存失败：" + e.message);
+    showBanner("保存失败：无法连接 AgentDeck 服务（服务进程已退出——保存成功后会自动退出，命令行窗口被关闭也会停止服务）。请重新运行 run.ps1 后再试。（" + e.message + "）");
   } finally {
     btn.disabled = false;
     btn.textContent = "保存配置";
