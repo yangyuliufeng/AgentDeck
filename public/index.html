@@ -357,7 +357,7 @@ $("save").addEventListener("click", async () => {
         el.textContent = "＝ 无变化，未写入";
       } else if (r.ok) {
         el.className = "result ok";
-        el.textContent = "✓ 已保存（" + r.changedFiles.join("、") + "）";
+        el.textContent = "✓ 已保存（" + r.changedFiles.join("、") + "）" + (r.warning ? " ⚠︎ " + r.warning : "");
       } else {
         el.className = "result err";
         el.textContent = "✗ " + r.error;

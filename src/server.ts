@@ -133,7 +133,9 @@ export function startServer(port: number): ReturnType<typeof createServer> {
             results[id] = { ok: true, changedFiles: [], skipped: true };
             continue;
           }
-          results[id] = target.apply(selection, catalog);
+          const r = await target.apply(selection, catalog);
+          if (r.warning) console.warn(`⚠︎  ${id}: ${r.warning}`);
+          results[id] = r;
         }
 
         const failed = Object.values(results).some((r) => !r.ok);

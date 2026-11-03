@@ -68,7 +68,7 @@ models:
 | Cline（桌面版） | `~/.cline/data/settings/providers.json` | `lastUsedProvider` 与对应槽位的 apiKey / model / baseUrl / contextWindow（唯一被 Cline 读取的文件；同目录的 models.json / secrets.json 是程序遗留的陈旧数据，不会同步） |
 | Claude Code | `~/.claude/settings.json` | `env.ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` / 上下文与输出上限 |
 | OpenCode | `~/.config/opencode/opencode.json` | 顶层 `model`（`provider/model`）与 `provider.<id>.options.baseURL`、模型 limit/cost |
-| | `~/.local/share/opencode/opencode.db` | v2 的 API key 权威存储：`credential` 表（`{"type":"key","key":...}`）。**运行中的 opencode 服务会实时读取该表，改完即生效，无需重启**。`auth.json` 是 v1 遗留文件，v2 运行时不再读取，本程序也不再写它。DB 尚未初始化（全新机器）时回退为把 key 写进 opencode.json 的 `options.apiKey` |
+| | （opencode 官方凭据接口） | API key 通过 opencode 本地 server 的 `/api/credential` 写入凭据存储（`~/.local/share/opencode/opencode.db` 的 `credential` 表，v2 的权威存储，`auth.json` 是 v1 遗留文件已不读）。server 优先复用托管后台服务（`opencode service status`），没在跑则临时拉起一个 `opencode serve` 子进程，用完即退。**不再直写 opencode.db**，只读它来检测当前生效的 key |
 
 所有写入都会：
 

@@ -55,7 +55,7 @@ export const claudeCodeTarget: TargetApp = {
     );
   },
 
-  apply(sel: AppSelection, catalog: Catalog) {
+  async apply(sel: AppSelection, catalog: Catalog) {
     const provider = catalog.providers[sel.provider];
     const model = getModel(catalog, sel.model);
     if (!provider) return { ok: false, changedFiles: [], error: `未知 provider: ${sel.provider}` };

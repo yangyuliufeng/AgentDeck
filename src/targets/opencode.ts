@@ -1,10 +1,15 @@
-import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { AppSelection, Catalog, TargetApp } from "../types.js";
 import { opencodeConfigPath, opencodeDbPath } from "../paths.js";
 import { readJson, writeJsonAtomic } from "../fsutil.js";
 import { matchProvider, getModel } from "../catalog.js";
 import { withV1 } from "../url.js";
+import {
+  connectOpenCodeServer,
+  createCredential,
+  listCredentials,
+  removeCredential,
+} from "../opencode-server.js";
 
 interface OpenCodeModelEntry {
   name?: string;
@@ -26,19 +31,19 @@ interface OpenCodeConfig {
   [k: string]: unknown;
 }
 
-/* ---------- node:sqlite 兼容加载 ----------
+/* ---------- node:sqlite 兼容加载（仅用于只读检测） ----------
  * node:sqlite 自 Node 22.13 起才默认可用（更早版本需 --experimental-sqlite 或根本没有）。
  * 用 createRequire + try/catch 加载：老版本 Node 上程序仍能启动，
- * 只是 OpenCode 的 key 会回退写入 opencode.json 的 options.apiKey。
+ * 只是「当前生效 key」的检测退化为读 opencode.json 的 options.apiKey。
+ * 注意：AgentDeck 不再写 opencode.db——key 的写入一律走官方 server API，
+ * 详见 opencode-server.ts。
  */
 interface SqliteStatement {
   get(...params: unknown[]): unknown;
-  run(...params: unknown[]): unknown;
 }
 
 interface SqliteDatabase {
   prepare(sql: string): SqliteStatement;
-  exec(sql: string): void;
   close(): void;
 }
 
@@ -57,23 +62,28 @@ function getSqlite(): SqliteCtor | null {
   return sqliteCtor;
 }
 
-/* ---------- credential 表（opencode v2 的 API key 存储于 opencode.db） ---------- */
+/* ---------- credential 表只读检测 ---------- */
 
 interface CredentialRow {
-  id: string;
   value: string;
 }
 
-/** 读取某 provider 在 credential 表中的 key；DB 不存在或无行返回 null */
+/**
+ * 读取某 provider 当前生效的凭据 key；DB 不存在或读不到返回 null。
+ * 排序复刻 opencode 的选择语义（core/credential.ts 按 asc(active), asc(time_created), asc(id)
+ * 排序后倒序取第一个）：active=1 的最新行优先，其后按时间新的优先。
+ */
 function readCredentialKey(dbPath: string, providerId: string): string | null {
   const DatabaseSync = getSqlite();
   if (!DatabaseSync) return null;
   try {
     const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
-      const row = db.prepare("SELECT value FROM credential WHERE integration_id = ?").get(providerId) as
-        | CredentialRow
-        | undefined;
+      const row = db
+        .prepare(
+          "SELECT value FROM credential WHERE integration_id = ? ORDER BY active DESC, time_created DESC, id DESC LIMIT 1",
+        )
+        .get(providerId) as CredentialRow | undefined;
       if (!row) return null;
       const parsed = JSON.parse(row.value) as { type?: string; key?: string };
       return parsed.type === "key" && typeof parsed.key === "string" ? parsed.key : null;
@@ -85,57 +95,23 @@ function readCredentialKey(dbPath: string, providerId: string): string | null {
   }
 }
 
-/** 生成形如 cred_xxx 的凭据行 id */
-function newCredentialId(): string {
-  return `cred_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
-}
-
-/**
- * 把 key 写入 credential 表（运行中的 opencode 服务会实时读到，无需重启）。
- * DB 文件或表不存在时返回 false（调用方回退为把 key 写进 opencode.json 的 options.apiKey）。
- */
-function writeCredentialKey(dbPath: string, providerId: string, apiKey: string): boolean {
-  if (!existsSync(dbPath)) return false;
+/** 该 provider 在凭据库中是否已有凭据行；无法判断（无 node:sqlite / DB 不存在）返回 false */
+function hasCredentialRow(dbPath: string, providerId: string): boolean {
   const DatabaseSync = getSqlite();
   if (!DatabaseSync) return false;
-  let db: SqliteDatabase;
   try {
-    db = new DatabaseSync(dbPath);
-  } catch {
-    return false;
-  }
-  try {
-    db.exec("PRAGMA busy_timeout = 3000");
-    const hasTable = db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='credential'")
-      .get();
-    if (!hasTable) return false;
-
-    const now = Date.now();
-    const valueJson = JSON.stringify({ type: "key", key: apiKey });
-    const existing = db.prepare("SELECT id FROM credential WHERE integration_id = ?").get(providerId) as
-      | CredentialRow
-      | undefined;
-    if (existing) {
-      db.prepare("UPDATE credential SET value = ?, time_updated = ? WHERE integration_id = ?").run(
-        valueJson,
-        now,
-        providerId,
-      );
-    } else {
-      db.prepare(
-        "INSERT INTO credential (id, integration_id, label, value, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?)",
-      ).run(newCredentialId(), providerId, "API key", valueJson, now, now);
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      return !!db.prepare("SELECT 1 FROM credential WHERE integration_id = ? LIMIT 1").get(providerId);
+    } finally {
+      db.close();
     }
-    return true;
   } catch {
     return false;
-  } finally {
-    db.close();
   }
 }
 
-/** 检测当前生效的 API key：优先 credential 表，其次 opencode.json 的 options.apiKey */
+/** 检测当前生效的 API key：优先 credential 表（只读），其次 opencode.json 的 options.apiKey */
 function detectApiKey(providerId: string): string | null {
   const fromDb = readCredentialKey(opencodeDbPath(), providerId);
   if (fromDb !== null) return fromDb;
@@ -143,12 +119,12 @@ function detectApiKey(providerId: string): string | null {
   return cfg?.provider?.[providerId]?.options?.apiKey ?? null;
 }
 
-/** OpenCode：model 与 provider 段写 opencode.json；API key 写 opencode.db 的 credential 表 */
+/** OpenCode：model 与 provider 段写 opencode.json；API key 走官方 server API 写凭据存储 */
 export const opencodeTarget: TargetApp = {
   id: "opencode",
   name: "OpenCode",
 
-  paths: () => [opencodeConfigPath(), opencodeDbPath()],
+  paths: () => [opencodeConfigPath()],
 
   detect(catalog) {
     const cfg = readJson<OpenCodeConfig>(opencodeConfigPath());
@@ -174,7 +150,7 @@ export const opencodeTarget: TargetApp = {
       return {
         id: "opencode",
         name: "OpenCode",
-        paths: [opencodeConfigPath(), opencodeDbPath()],
+        paths: [opencodeConfigPath()],
         current,
       };
     }
@@ -182,7 +158,7 @@ export const opencodeTarget: TargetApp = {
     return {
       id: "opencode",
       name: "OpenCode",
-      paths: [opencodeConfigPath(), opencodeDbPath()],
+      paths: [opencodeConfigPath()],
       current: null,
     };
   },
@@ -200,7 +176,7 @@ export const opencodeTarget: TargetApp = {
     );
   },
 
-  apply(sel: AppSelection, catalog: Catalog) {
+  async apply(sel: AppSelection, catalog: Catalog) {
     const provider = catalog.providers[sel.provider];
     const model = getModel(catalog, sel.model);
     if (!provider) return { ok: false, changedFiles: [], error: `未知 provider: ${sel.provider}` };
@@ -209,10 +185,39 @@ export const opencodeTarget: TargetApp = {
       return { ok: false, changedFiles: [], error: `${sel.baseURL} 不在 ${sel.provider} 的 base_urls 中` };
     }
 
+    const configPath = opencodeConfigPath();
     const changedFiles: string[] = [];
+
+    // 1. API key —— 走 opencode 官方 server API 写凭据存储。
+    //    凭据库里的生效凭据优先于 opencode.json 的 options.apiKey，只写配置文件对
+    //    已有凭据的 provider 不生效，所以 key 必须从这里过。
+    let keyViaApi = false;
+    const server = await connectOpenCodeServer();
+    if (server) {
+      try {
+        const entries = await listCredentials(server);
+        const mine = entries.filter((e) => e.integrationID === sel.provider);
+        let active = mine.find((e) => e.active);
+        /* 幂等：生效凭据已是目标 key 则不再创建，重复 apply 不会累积凭据行 */
+        if (!(active?.value.type === "key" && active.value.key === provider.apiKey)) {
+          active = await createCredential(server, sel.provider, provider.apiKey);
+        }
+        /* 清理本工具历史上写入的旧行（label "API key"），保留当前生效行；用户自己登录产生的行不动 */
+        for (const e of mine) {
+          if (e.label === "API key" && e.id !== active?.id) {
+            await removeCredential(server, e.id).catch(() => {});
+          }
+        }
+        keyViaApi = true;
+      } catch {
+        /* API 路径失败 → 回退到配置文件 */
+      } finally {
+        server.close();
+      }
+    }
+
+    // 2. opencode.json —— 默认 model 与 provider 段
     try {
-      // 1. opencode.json —— 默认 model 与 provider 段
-      const configPath = opencodeConfigPath();
       const cfg = readJson<OpenCodeConfig>(configPath) ?? {};
       cfg.provider = cfg.provider ?? {};
 
@@ -248,23 +253,29 @@ export const opencodeTarget: TargetApp = {
 
       cfg.model = `${sel.provider}/${sel.model}`;
 
-      // 2. API key —— 优先写 opencode.db 的 credential 表（v2 的权威存储，运行中的服务实时生效）
-      const dbPath = opencodeDbPath();
-      if (writeCredentialKey(dbPath, sel.provider, provider.apiKey)) {
-        /* DB 凭据存在时会覆盖配置里的 key，无须写入 */
+      if (keyViaApi) {
+        /* key 已在凭据库中生效，配置里不再留副本（凭据存在时配置里的 key 本就被忽略） */
         delete entry.options.apiKey;
-        changedFiles.push(dbPath);
       } else {
-        /* DB 不可用（尚未初始化）时回退：写入 options.apiKey，opencode 无凭据时会使用它 */
+        /* 官方接口不可用时的兜底：写 options.apiKey（opencode 无凭据行时会使用它） */
         entry.options.apiKey = provider.apiKey;
       }
 
       writeJsonAtomic(configPath, cfg);
       changedFiles.push(configPath);
-
-      return { ok: true, changedFiles };
     } catch (e) {
       return { ok: false, changedFiles, error: `写入失败：${(e as Error).message}` };
     }
+
+    if (!keyViaApi && hasCredentialRow(opencodeDbPath(), sel.provider)) {
+      return {
+        ok: true,
+        changedFiles,
+        warning:
+          "opencode 官方接口不可用，key 已写入 opencode.json 兜底；但凭据库中已有该 provider 的凭据，实际生效的可能仍是旧 key。可启动 opencode 后重试，或运行 opencode auth login 更新",
+      };
+    }
+
+    return { ok: true, changedFiles };
   },
 };

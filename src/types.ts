@@ -60,6 +60,8 @@ export interface ApplyResult {
   /** 当前配置已与选择一致，无需写入 */
   skipped?: boolean;
   error?: string;
+  /** 写入成功但有需要用户注意的情况（如凭据走了回退路径，可能不生效） */
+  warning?: string;
 }
 
 export interface TargetApp {
@@ -71,5 +73,5 @@ export interface TargetApp {
   /** 当前生效配置是否已经等于该选择（相等则无需写入） */
   isCurrent(sel: AppSelection, catalog: Catalog): boolean;
   /** 将选择写入目标程序配置文件 */
-  apply(sel: AppSelection, catalog: Catalog): ApplyResult;
+  apply(sel: AppSelection, catalog: Catalog): Promise<ApplyResult>;
 }
